@@ -32,8 +32,10 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC_DIR = ROOT / "public"
-GENERATED_DIR = ROOT / "generated"
-STATE_DIR = ROOT / ".claude-web"
+KNOWLEDGE_DIR = ROOT / "knowledge"
+_DATA_HOME = Path(os.environ.get("CCRICH_DATA", Path.home() / ".cc-rich"))
+GENERATED_DIR = _DATA_HOME / "generated"
+STATE_DIR = _DATA_HOME / ".claude-web"
 LOG_DIR = STATE_DIR / "logs"
 SESSION_ID_FILE = STATE_DIR / "session_id"
 HISTORY_FILE = STATE_DIR / "history.json"
@@ -155,10 +157,14 @@ def newest_generated_html(started_at: float) -> Path | None:
 
 
 def build_prompt(message: str) -> str:
-    output_path = OUTPUT_FILE.relative_to(ROOT)
+    output_path = str(OUTPUT_FILE)
+    kb_path = str(KNOWLEDGE_DIR)
     return f"""你正在通过一个本地网页代理回答用户。
 
 你必须第一步就把最终结果写入文件 `{output_path}`。
+
+生成 HTML 之前，先读取 `{kb_path}/` 目录下的所有文件作为知识库上下文。
+这些文件包含项目背景、需求文档、设计规范等，生成的页面内容必须基于这些知识。
 
 要求：
 - 写入完整 HTML 文档，从 <!doctype html> 到 </html>
@@ -278,7 +284,7 @@ def spawn_claude(message: str, msgid: str, is_continue: bool) -> None:
 
         if not OUTPUT_FILE.exists():
             OUTPUT_FILE.write_text(
-                error_html("本轮没有生成 HTML", f"Claude Code 本轮结束后仍未写入 {OUTPUT_FILE.relative_to(ROOT)}。"),
+                error_html("本轮没有生成 HTML", f"Claude Code 本轮结束后仍未写入 {OUTPUT_FILE}。"),
                 encoding="utf-8",
             )
 
@@ -635,7 +641,8 @@ def main() -> None:
 Claude Code Web Proxy
   engine: ccr code -p
   stream: JSONL -> SSE -> browser
-  output: {OUTPUT_FILE.relative_to(ROOT)}
+  output: {OUTPUT_FILE}
+  knowledge: {KNOWLEDGE_DIR}
   terminal: ws://{HOST}:{TERMINAL_PORT}
   session: {session_id[:8]}...
   url: http://{HOST}:{PORT}

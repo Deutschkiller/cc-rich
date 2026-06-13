@@ -4,6 +4,7 @@ const path = require('path');
 const http = require('http');
 
 const ROOT = path.resolve(__dirname, '..');
+const RESOURCES = app.isPackaged ? process.resourcesPath : ROOT;
 const HOST = process.env.HOST || '127.0.0.1';
 
 let mainWindow = null;
@@ -11,12 +12,16 @@ let pyProc = null;
 let baseUrl = null;
 
 function startPythonServer() {
-  const serverPath = path.join(ROOT, 'server.py');
+  const serverPath = path.join(RESOURCES, 'server.py');
   const python = process.env.PYTHON || 'python3';
+
+  const dataDir = app.isPackaged
+    ? path.join(app.getPath('userData'), 'data')
+    : ROOT;
 
   pyProc = spawn(python, [serverPath], {
     cwd: ROOT,
-    env: { ...process.env, PYTHONUNBUFFERED: '1', HOST },
+    env: { ...process.env, PYTHONUNBUFFERED: '1', HOST, CCRICH_DATA: dataDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 

@@ -11,10 +11,11 @@
     "appId": "com.ccrich.app",
     "productName": "CC Rich",
     "files": [
-      "electron/**/*",
-      "server.py",
-      "public/**/*",
-      "scripts/**/*"
+      "electron/**/*"
+    ],
+    "extraResources": [
+      { "from": "server.py", "to": "server.py" },
+      { "from": "public", "to": "public" }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -28,6 +29,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3"
   }
 }
