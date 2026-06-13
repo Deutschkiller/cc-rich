@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code Web Proxy</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --border: #30363d;
+    --text: #c9d1d9; --text2: #8b949e; --accent: #58a6ff; --green: #3fb950;
+    --orange: #d2991d; --red: #f85149;
+    --font-mono: "SF Mono", "Cascadia Code", Consolas, Monaco, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    height: 100vh; overflow: hidden; display: flex;
+    background: var(--bg); color: var(--text); font-family: var(--font-sans);
+  }
+  .sidebar {
+    width: 220px; flex-shrink: 0; display: flex; flex-direction: column;
+    background: var(--surface); border-right: 1px solid var(--border);
+  }
+  .sidebar-header { padding: 16px 14px; border-bottom: 1px solid var(--border); }
+  .sidebar-header h1 { font-size: 15px; color: #e6edf3; margin-bottom: 2px; }
+  .sidebar-header span { font-size: 11px; color: var(--text2); }
+  .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); margin-right: 6px; animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .sidebar-info { padding: 14px; font-size: 11px; color: var(--text2); line-height: 1.8; }
+  .sidebar-info strong { color: var(--text); }
+  .sidebar-info { padding: 10px 14px; font-size: 11px; color: var(--text2); }
+  .sidebar-info strong { color: var(--accent); }
+  .page-title {
+    padding: 8px 14px; font-size: 11px; color: var(--text2);
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-weight: 700;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .page-count { font-weight: 400; color: var(--text2); font-size: 10px; }
+  #pageList { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .page-item {
+    padding: 7px 14px; cursor: pointer; border-left: 3px solid transparent;
+    transition: background .12s, border-color .12s;
+  }
+  .page-item:hover { background: var(--surface2); }
+  .page-item.active { border-left-color: var(--accent); background: rgba(88,166,255,.06); }
+  .page-item-name {
+    color: var(--text); font-size: 12px; line-height: 1.3;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .page-item.active .page-item-name { color: var(--accent); font-weight: 600; }
+  .page-item-meta { color: var(--text2); font-size: 10px; margin-top: 1px; }
+  .sidebar-footer { padding: 10px 14px; border-top: 1px solid var(--border); }
+  .sidebar-footer button {
+    width: 100%; height: 30px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text); cursor: pointer; font-size: 12px;
+  }
+  .sidebar-footer button:hover { border-color: var(--accent); color: var(--accent); }
+
+  .main {
+    flex: 1; min-width: 0; height: 100vh; display: flex; flex-direction: column;
+  }
+  .html-pane { flex: 1; min-height: 0; overflow: auto; background: #0d1117; position: relative; }
+  .html-empty {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px;
+    color: var(--text2); text-align: center; font-size: 14px; pointer-events: none;
+  }
+  .html-empty .icon { font-size: 40px; opacity: .4; }
+  .html-frame { width: 100%; height: 100%; border: 0; display: block; }
+
+  .divider {
+    height: 4px; flex-shrink: 0; background: var(--border); cursor: row-resize;
+    position: relative; transition: background .15s;
+  }
+  .divider:hover, .divider.dragging { background: var(--accent); }
+  .divider::after {
+    content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: 28px; height: 3px; border-radius: 2px; background: var(--text2); opacity: .5;
+  }
+
+  .terminal-pane {
+    flex: 1; min-height: 0; overflow: hidden; background: #0a0e13;
+  }
+  .terminal-pane .xterm { height: 100%; padding: 4px 0 0 8px; }
+
+  .status-bar {
+    flex-shrink: 0; height: 26px; display: flex; align-items: center; gap: 10px;
+    padding: 0 16px; background: var(--surface2); border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text2);
+  }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .status-dot.idle { background: var(--text2); }
+  .status-dot.active { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  .status-dot.done { background: var(--green); }
+  .status-dot.error { background: var(--red); }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  @media (max-width: 760px) {
+    .sidebar { display: none; }
+  }
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <h1><span class="dot"></span>Claude Code</h1>
+    <span>ccr code · 实时网页代理</span>
+  </div>
+  <div class="sidebar-info">
+    当前: <strong id="currentPageLabel">无</strong>
+  </div>
+  <div class="page-title">
+    <span>HTML 页面</span>
+    <span class="page-count" id="pageCount"></span>
+  </div>
+  <div id="pageList"><div style="color:var(--text2);font-style:italic;padding:12px 14px">加载中...</div></div>
+  <div class="sidebar-footer">
+    <button type="button" onclick="resetSession()">重置会话</button>
+  </div>
+</aside>
+
+<main class="main">
+  <section class="html-pane" id="htmlPane">
+    <div class="html-empty" id="htmlEmpty">
+      <div class="icon">&#x25B2;</div>
+      <div>HTML 渲染区</div>
+      <div style="font-size:12px">Claude 生成的网页将在这里展示</div>
+    </div>
+  </section>
+
+  <div class="divider" id="divider"></div>
+
+  <section class="terminal-pane" id="terminalPane">
+    <div id="terminal" style="width:100%;height:100%"></div>
+  </section>
+
+  <div class="status-bar">
+    <span class="status-dot idle" id="statusDot"></span>
+    <span id="statusLabel">就绪</span>
+    <span style="margin-left:auto" id="htmlStatus"></span>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+<script>
+let lastHtmlContent = '';
+let wsReconnectTimer = null;
+let wsReconnectDelay = 1000;
+
+const htmlPane = document.getElementById('htmlPane');
+const htmlEmpty = document.getElementById('htmlEmpty');
+const terminalPane = document.getElementById('terminalPane');
+const divider = document.getElementById('divider');
+const statusDot = document.getElementById('statusDot');
+const statusLabel = document.getElementById('statusLabel');
+const htmlStatus = document.getElementById('htmlStatus');
+
+function escapeHtml(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function setStatus(state, message) {
+  statusDot.className = 'status-dot ' + state;
+  statusLabel.textContent = message;
+}
+
+let activePage = null;
+
+function switchToPage(name) {
+  activePage = name;
+  let frame = htmlPane.querySelector('.html-frame');
+  if (!frame) {
+    htmlEmpty.style.display = 'none';
+    frame = document.createElement('iframe');
+    frame.className = 'html-frame';
+    frame.title = 'HTML 渲染结果';
+    htmlPane.appendChild(frame);
+  }
+  frame.src = '/' + encodeURIComponent(name);
+  document.getElementById('currentPageLabel').textContent = name;
+  document.querySelectorAll('.page-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === name);
+  });
+  htmlStatus.textContent = new Date().toLocaleTimeString('zh-CN') + ' 已切换';
+}
+
+// ---- xterm.js init ----
+const term = new Terminal({
+  cursorBlink: true,
+  theme: { background: '#0a0e13', foreground: '#c9d1d9', cursor: '#58a6ff' },
+  fontSize: 13.5,
+  fontFamily: '"SF Mono", "Cascadia Code", Consolas, Monaco, monospace',
+  allowProposedApi: true,
+});
+
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.loadAddon(new WebLinksAddon.WebLinksAddon());
+
+term.open(document.getElementById('terminal'));
+fitAddon.fit();
+
+function sendResize() {
+  if (!termSocket || termSocket.readyState !== WebSocket.OPEN) return;
+  const dims = fitAddon.proposeDimensions();
+  if (dims) {
+    termSocket.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
+  }
+}
+
+term.onResize(() => sendResize());
+
+// ---- WebSocket terminal ----
+let termSocket = null;
+
+function connectTerminal() {
+  if (termSocket && termSocket.readyState === WebSocket.OPEN) return;
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.hostname}:${parseInt(location.port || '3000') + 1}`;
+
+  setStatus('active', '连接终端...');
+  termSocket = new WebSocket(wsUrl);
+  termSocket.binaryType = 'arraybuffer';
+
+  termSocket.onopen = () => {
+    setStatus('idle', '终端已连接');
+    wsReconnectDelay = 1000;
+    term.onData(data => {
+      if (termSocket.readyState === WebSocket.OPEN) {
+        termSocket.send(new TextEncoder().encode(data));
+      }
+    });
+    sendResize();
+    term.focus();
+  };
+
+  termSocket.onmessage = (event) => {
+    if (event.data instanceof ArrayBuffer) {
+      term.write(new Uint8Array(event.data));
+    }
+  };
+
+  termSocket.onclose = () => {
+    setStatus('error', '终端断开，自动重连...');
+    term.onData(() => {});
+    if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = setTimeout(() => {
+      wsReconnectDelay = Math.min(wsReconnectDelay * 2, 15000);
+      connectTerminal();
+    }, wsReconnectDelay);
+  };
+
+  termSocket.onerror = () => {
+    if (termSocket.readyState === WebSocket.OPEN) return;
+    setStatus('error', '终端连接失败，自动重连...');
+  };
+}
+
+// ---- HTML output polling ----
+async function pollOutput() {
+  try {
+    const resp = await fetch('/api/read-output');
+    const data = await resp.json();
+    if (data.found && data.html && data.html !== lastHtmlContent) {
+      lastHtmlContent = data.html;
+      switchToPage('claude-output.html');
+      loadPages();
+      htmlStatus.textContent = new Date().toLocaleTimeString('zh-CN') + ' claude-output 已更新';
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function renderHtml(html) {
+  let frame = htmlPane.querySelector('.html-frame');
+  if (!frame) {
+    htmlEmpty.style.display = 'none';
+    frame = document.createElement('iframe');
+    frame.className = 'html-frame';
+    frame.title = 'HTML 渲染结果';
+    htmlPane.appendChild(frame);
+  }
+  const doc = frame.contentDocument || frame.contentWindow.document;
+  doc.open();
+  doc.write(html);
+  doc.close();
+}
+
+// ---- Divider drag ----
+let dragging = false;
+
+divider.addEventListener('mousedown', (e) => {
+  dragging = true;
+  divider.classList.add('dragging');
+  document.body.style.cursor = 'row-resize';
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const main = document.querySelector('.main');
+  const rect = main.getBoundingClientRect();
+  const totalHeight = rect.height - divider.offsetHeight;
+  const y = e.clientY - rect.top;
+  const ratio = Math.max(0.1, Math.min(0.9, y / totalHeight));
+
+  htmlPane.style.flex = '0 0 ' + (ratio * 100) + '%';
+  terminalPane.style.flex = '0 0 ' + ((1 - ratio) * 100) + '%';
+
+  setTimeout(() => {
+    fitAddon.fit();
+    sendResize();
+  }, 50);
+});
+
+document.addEventListener('mouseup', () => {
+  if (!dragging) return;
+  dragging = false;
+  divider.classList.remove('dragging');
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+});
+
+window.addEventListener('resize', () => {
+  fitAddon.fit();
+  sendResize();
+});
+
+// ---- Pages ----
+async function loadPages() {
+  const list = document.getElementById('pageList');
+  try {
+    const resp = await fetch('/api/pages');
+    const data = await resp.json();
+    document.getElementById('pageCount').textContent = data.pages && data.pages.length ? data.pages.length + ' 个' : '';
+    if (!data.pages || data.pages.length === 0) {
+      list.innerHTML = '<div style="color:var(--text2);font-style:italic;padding:8px 14px">暂无页面</div>';
+      return;
+    }
+    list.innerHTML = data.pages.map(p => {
+      const time = new Date(p.mtime * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const size = p.size > 1024 ? (p.size / 1024).toFixed(1) + 'K' : p.size + 'B';
+      const active = activePage === p.name ? ' active' : '';
+      return `<div class="page-item${active}" data-page="${escapeHtml(p.name)}" onclick="switchToPage('${escapeHtml(p.name)}')">
+        <div class="page-item-name">${escapeHtml(p.name)}</div>
+        <div class="page-item-meta">${time} · ${size}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = '<div style="color:var(--red);padding:8px 14px">加载失败</div>';
+  }
+}
+
+async function resetSession() {
+  try { await fetch('/api/reset', { method: 'POST' }); } catch (e) {}
+  activePage = null;
+  lastHtmlContent = '';
+  const frame = htmlPane.querySelector('.html-frame');
+  if (frame) { frame.remove(); }
+  htmlEmpty.style.display = '';
+  htmlStatus.textContent = '';
+  document.getElementById('currentPageLabel').textContent = '无';
+  setStatus('idle');
+  loadPages();
+}
+
+// ---- Init ----
+connectTerminal();
+loadPages();
+pollOutput();
+setInterval(pollOutput, 2000);
+</script>
+</body>
+</html>
