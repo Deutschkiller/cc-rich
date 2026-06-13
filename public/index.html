@@ -218,7 +218,7 @@ function switchToPage(name) {
     frame.title = 'HTML 渲染结果';
     htmlPane.appendChild(frame);
   }
-  frame.src = '/' + encodeURIComponent(name) + '?_=' + Date.now();
+  frame.src = '/g/' + encodeURIComponent(name) + '?_=' + Date.now();
   document.getElementById('currentPageLabel').textContent = name;
   document.querySelectorAll('.page-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === name);

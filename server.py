@@ -32,11 +32,12 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC_DIR = ROOT / "public"
+GENERATED_DIR = ROOT / "generated"
 STATE_DIR = ROOT / ".claude-web"
 LOG_DIR = STATE_DIR / "logs"
 SESSION_ID_FILE = STATE_DIR / "session_id"
 HISTORY_FILE = STATE_DIR / "history.json"
-OUTPUT_FILE = PUBLIC_DIR / "claude-output.html"
+OUTPUT_FILE = GENERATED_DIR / "claude-output.html"
 
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "3000"))
@@ -48,6 +49,7 @@ STREAM_TIMEOUT_SECONDS = int(os.environ.get("STREAM_TIMEOUT_SECONDS", "1800"))
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
+GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def send_json(handler: SimpleHTTPRequestHandler, data: dict, code: int = 200) -> None:
@@ -134,8 +136,8 @@ def claude_command(is_continue: bool) -> list[str]:
 def newest_generated_html(started_at: float) -> Path | None:
     candidates = []
 
-    for path in PUBLIC_DIR.glob("*.html"):
-        if path.name in {"index.html", OUTPUT_FILE.name}:
+    for path in GENERATED_DIR.glob("*.html"):
+        if path.name == OUTPUT_FILE.name:
             continue
 
         try:
@@ -308,15 +310,17 @@ class Handler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/api/pages":
             pages = []
-            for p in sorted(PUBLIC_DIR.glob("*.html"), key=lambda x: x.stat().st_mtime, reverse=True):
-                if p.name == "index.html":
-                    continue
+            for p in sorted(GENERATED_DIR.glob("*.html"), key=lambda x: x.stat().st_mtime, reverse=True):
                 pages.append({
                     "name": p.name,
                     "mtime": p.stat().st_mtime,
                     "size": p.stat().st_size,
                 })
             send_json(self, {"pages": pages})
+            return
+
+        if parsed.path.startswith("/g/"):
+            self.handle_generated_file(parsed.path)
             return
 
         if parsed.path == "/":
@@ -435,6 +439,27 @@ class Handler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
+    def handle_generated_file(self, path: str) -> None:
+        filename = unquote(path[len("/g/"):])
+        if not filename or ".." in filename or "/" in filename:
+            self.send_response(HTTPStatus.BAD_REQUEST)
+            self.end_headers()
+            return
+
+        file_path = GENERATED_DIR / filename
+        if not file_path.is_file():
+            self.send_response(HTTPStatus.NOT_FOUND)
+            self.end_headers()
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(file_path.stat().st_size))
+        self.end_headers()
+        with file_path.open("rb") as f:
+            shutil.copyfileobj(f, self.wfile)
+
     def handle_read_output(self) -> None:
         if OUTPUT_FILE.exists():
             send_json(self, {"found": True, "html": OUTPUT_FILE.read_text(encoding="utf-8")})
@@ -452,17 +477,13 @@ class Handler(SimpleHTTPRequestHandler):
             send_json(self, {"error": "非法文件名"}, HTTPStatus.BAD_REQUEST)
             return
 
-        file_path = PUBLIC_DIR / filename
+        file_path = GENERATED_DIR / filename
         if not file_path.exists() or not file_path.is_file():
             send_json(self, {"error": "文件不存在"}, HTTPStatus.NOT_FOUND)
             return
 
         if file_path.suffix != ".html":
             send_json(self, {"error": "只能删除 HTML 文件"}, HTTPStatus.BAD_REQUEST)
-            return
-
-        if file_path.name == "index.html":
-            send_json(self, {"error": "不能删除 index.html"}, HTTPStatus.FORBIDDEN)
             return
 
         file_path.unlink()
@@ -590,7 +611,25 @@ def start_terminal_server() -> None:
 
 
 def main() -> None:
+    global PORT, TERMINAL_PORT
+
     session_id = get_or_create_session_id()
+    base_port = PORT
+    base_terminal = TERMINAL_PORT
+
+    for offset in range(10):
+        try:
+            PORT = base_port + offset
+            TERMINAL_PORT = PORT + 1
+            httpd = QuietThreadingHTTPServer((HOST, PORT), Handler)
+            break
+        except OSError:
+            if offset == 9:
+                print(f"无法绑定端口 {base_port}–{base_port + offset}，全部被占用。")
+                sys.exit(1)
+            print(f"端口 {PORT} 被占用，尝试 {PORT + 1}...")
+            continue
+
     print(
         f"""
 Claude Code Web Proxy
@@ -606,11 +645,10 @@ Claude Code Web Proxy
     terminal_thread = threading.Thread(target=start_terminal_server, daemon=True)
     terminal_thread.start()
 
-    with QuietThreadingHTTPServer((HOST, PORT), Handler) as httpd:
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            print("\n已停止。")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\n已停止。")
 
 
 if __name__ == "__main__":
