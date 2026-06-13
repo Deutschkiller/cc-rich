@@ -22,7 +22,7 @@ import uuid
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 try:
     import websockets
@@ -337,6 +337,15 @@ class Handler(SimpleHTTPRequestHandler):
 
         send_json(self, {"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+
+        if parsed.path.startswith("/api/pages/"):
+            self.handle_delete_page(parsed.path)
+            return
+
+        send_json(self, {"error": "Not found"}, HTTPStatus.NOT_FOUND)
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -431,6 +440,33 @@ class Handler(SimpleHTTPRequestHandler):
             send_json(self, {"found": True, "html": OUTPUT_FILE.read_text(encoding="utf-8")})
         else:
             send_json(self, {"found": False})
+
+    def handle_delete_page(self, path: str) -> None:
+        prefix = "/api/pages/"
+        if not path.startswith(prefix):
+            send_json(self, {"error": "非法路径"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        filename = unquote(path[len(prefix):])
+        if not filename or ".." in filename or "/" in filename:
+            send_json(self, {"error": "非法文件名"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        file_path = PUBLIC_DIR / filename
+        if not file_path.exists() or not file_path.is_file():
+            send_json(self, {"error": "文件不存在"}, HTTPStatus.NOT_FOUND)
+            return
+
+        if file_path.suffix != ".html":
+            send_json(self, {"error": "只能删除 HTML 文件"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        if file_path.name == "index.html":
+            send_json(self, {"error": "不能删除 index.html"}, HTTPStatus.FORBIDDEN)
+            return
+
+        file_path.unlink()
+        send_json(self, {"status": "deleted", "name": filename})
 
     def handle_reset(self) -> None:
         if STATE_DIR.exists():
