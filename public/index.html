@@ -49,11 +49,17 @@
   .sidebar-info strong { color: var(--text); }
   .sidebar-info { padding: 10px 14px; font-size: 11px; color: var(--text2); }
   .sidebar-info strong { color: var(--accent); }
-  .page-title {
-    padding: 8px 14px; font-size: 11px; color: var(--text2);
-    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-weight: 700;
+  .section-title {
+    padding: 8px 14px; font-size: 11px; color: var(--text2); font-weight: 700;
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer; user-select: none; transition: color .15s;
   }
+  .section-title:hover { color: var(--text); }
+  .section-title .arrow {
+    display: inline-block; width: 14px; font-size: 9px; transition: transform .2s;
+  }
+  .section-title .arrow.open { transform: rotate(90deg); }
   .page-count { font-weight: 400; color: var(--text2); font-size: 10px; }
   .page-refresh {
     width: 20px; height: 20px; border-radius: 4px; border: none;
@@ -62,7 +68,22 @@
     transition: color .12s;
   }
   .page-refresh:hover { color: var(--accent); }
-  #pageList { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .collapsible-body {
+    overflow: hidden; transition: max-height .35s ease;
+  }
+  #pageListBody { max-height: 2000px; }
+  #pageListBody.collapsed { max-height: 0; }
+  #pageList { overflow-y: auto; padding: 4px 0; }
+  #knowledgeBody { max-height: 2000px; }
+  #knowledgeBody.collapsed { max-height: 0; }
+  #knowledgeTree { overflow-y: auto; max-height: 200px; padding: 2px 0; }
+  .kt-item { padding: 3px 8px 3px 14px; cursor: pointer; font-size: 11px; color: var(--text); }
+  .kt-item:hover { background: var(--surface2); }
+  .kt-dir { font-weight: 600; }
+  .kt-toggle { display: inline-block; width: 12px; color: var(--text2); font-size: 10px; }
+  .kt-name { margin-left: 2px; }
+  .kt-children { display: none; }
+  .kt-children.open { display: block; }
   .page-item {
     padding: 7px 14px; cursor: pointer; border-left: 3px solid transparent;
     transition: background .12s, border-color .12s;
@@ -164,11 +185,20 @@
   <div class="sidebar-info">
     当前: <strong id="currentPageLabel">无</strong>
   </div>
-  <div class="page-title">
-    <span><button class="page-refresh" title="刷新列表" onclick="loadPages()">&#x21bb;</button> HTML 页面</span>
+  <div class="section-title" onclick="toggleSection('pageListBody', this)">
+    <span><span class="arrow open">&#x25b6;</span> <button class="page-refresh" title="刷新列表" onclick="event.stopPropagation(); loadPages()">&#x21bb;</button> HTML 页面</span>
     <span class="page-count" id="pageCount"></span>
   </div>
-  <div id="pageList"><div style="color:var(--text2);font-style:italic;padding:12px 14px">加载中...</div></div>
+  <div class="collapsible-body" id="pageListBody">
+    <div id="pageList"><div style="color:var(--text2);font-style:italic;padding:12px 14px">加载中...</div></div>
+  </div>
+  <div class="section-title" onclick="toggleSection('knowledgeBody', this)">
+    <span><span class="arrow open">&#x25b6;</span> &#x1F4DA; 知识库</span>
+    <button class="page-refresh" title="刷新知识库" onclick="event.stopPropagation(); loadKnowledgeTree()">&#x21bb;</button>
+  </div>
+  <div class="collapsible-body" id="knowledgeBody">
+    <div id="knowledgeTree"><div style="color:var(--text2);font-style:italic;padding:8px 14px">加载中...</div></div>
+  </div>
   <div class="sidebar-footer">
     <button type="button" onclick="resetSession()">重置会话</button>
   </div>
@@ -563,9 +593,97 @@ async function resetSession() {
   loadPages();
 }
 
+// ---- Knowledge tree ----
+async function loadKnowledgeTree() {
+  const tree = document.getElementById('knowledgeTree');
+  try {
+    const resp = await fetch('/api/knowledge');
+    const data = await resp.json();
+    if (!data.tree || data.tree.length === 0) {
+      tree.innerHTML = '<div style="color:var(--text2);font-style:italic;padding:4px 14px">空</div>';
+      return;
+    }
+    tree.innerHTML = data.tree.map(n => renderKnowledgeNode(n, 0)).join('');
+  } catch (e) {
+    tree.innerHTML = '<div style="color:var(--red);padding:4px 14px;font-size:11px">加载失败</div>';
+  }
+}
+
+function renderKnowledgeNode(node, depth) {
+  const pad = 14 + depth * 14;
+  if (node.type === 'dir') {
+    const hasKids = node.children && node.children.length > 0;
+    const id = 'k_' + node.path.replace(/[^a-zA-Z0-9]/g, '_');
+    let html = `<div class="kt-item kt-dir" style="padding-left:${pad}px" data-kid="${id}">`;
+    if (hasKids) html += `<span class="kt-toggle" onclick="event.stopPropagation();toggleKNode('${id}')">&#x25b6;</span>`;
+    else html += `<span class="kt-toggle"></span>`;
+    html += `<span class="kt-name">${escapeHtml(node.name)}/</span></div>`;
+    if (hasKids) {
+      html += `<div class="kt-children" id="${id}">${node.children.map(c => renderKnowledgeNode(c, depth + 1)).join('')}</div>`;
+    }
+    return html;
+  }
+  return `<div class="kt-item" style="padding-left:${pad}px" onclick="event.stopPropagation();previewKnowledge('${escapeHtml(node.path)}')">
+    <span class="kt-toggle"></span><span class="kt-name">${escapeHtml(node.name)}</span>
+  </div>`;
+}
+
+function toggleKNode(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const open = el.classList.toggle('open');
+  const item = document.querySelector(`[data-kid="${id}"]`);
+  if (item) {
+    const tgl = item.querySelector('.kt-toggle');
+    if (tgl) tgl.innerHTML = open ? '&#x25bc;' : '&#x25b6;';
+  }
+}
+
+async function previewKnowledge(path) {
+  try {
+    const resp = await fetch('/api/knowledge/read?path=' + encodeURIComponent(path));
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+    // 在 HTML 预览区展示文件内容
+    let frame = htmlPane.querySelector('.html-frame');
+    if (!frame) {
+      htmlEmpty.style.display = 'none';
+      frame = document.createElement('iframe');
+      frame.className = 'html-frame';
+      frame.title = '预览';
+      htmlPane.appendChild(frame);
+    }
+    const doc = frame.contentDocument || frame.contentWindow.document;
+    doc.open();
+    doc.write(`<!doctype html><html><head><meta charset="UTF-8"><style>
+      body { margin:0; padding:20px 28px; font-family:${getComputedStyle(document.body).fontFamily};
+        background:var(--html-bg, #0d1117); color:var(--text, #c9d1d9); }
+      pre { white-space:pre-wrap; line-height:1.6; font-size:13px;
+        background:var(--surface, #161b22); padding:16px; border-radius:6px; border:1px solid var(--border, #30363d); }
+      .meta { color:var(--text2, #8b949e); font-size:12px; margin-bottom:12px; }
+    </style></head><body>
+      <div class="meta">${escapeHtml(path)} · ${data.size} bytes</div>
+      <pre>${escapeHtml(data.content)}</pre>
+    </body></html>`);
+    doc.close();
+    document.getElementById('currentPageLabel').textContent = path;
+  } catch (e) {
+    alert('读取失败: ' + e.message);
+  }
+}
+
+function toggleSection(bodyId, titleEl) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  body.classList.toggle('collapsed');
+  const arrow = titleEl.querySelector('.arrow');
+  if (arrow) arrow.classList.toggle('open');
+}
+
 // ---- Init ----
 connectTerminal();
 loadPages();
+loadKnowledgeTree();
 pollOutput();
 setInterval(pollOutput, 2000);
 </script>

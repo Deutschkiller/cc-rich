@@ -325,6 +325,14 @@ class Handler(SimpleHTTPRequestHandler):
             send_json(self, {"pages": pages})
             return
 
+        if parsed.path == "/api/knowledge":
+            self.handle_knowledge_list()
+            return
+
+        if parsed.path == "/api/knowledge/read":
+            self.handle_knowledge_read(parsed.query)
+            return
+
         if parsed.path.startswith("/g/"):
             self.handle_generated_file(parsed.path)
             return
@@ -465,6 +473,54 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         with file_path.open("rb") as f:
             shutil.copyfileobj(f, self.wfile)
+
+    def handle_knowledge_list(self) -> None:
+        def walk(dir_path: Path, base: Path) -> list[dict]:
+            items = []
+            try:
+                entries = sorted(dir_path.iterdir(), key=lambda x: (not (x.is_dir() or x.is_symlink()), x.name.lower()))
+            except PermissionError:
+                return items
+            for p in entries:
+                if p.name.startswith(".") or p.name == "__pycache__":
+                    continue
+                name = p.name
+                rel = str(p.relative_to(base))
+                try:
+                    is_dir = p.is_dir() or (p.is_symlink() and p.resolve().is_dir())
+                except OSError:
+                    is_dir = False
+                if is_dir:
+                    children = walk(p, base) if p.is_dir() else walk(p.resolve(), base)
+                    items.append({"name": name, "path": rel, "type": "dir", "children": children})
+                else:
+                    items.append({"name": name, "path": rel, "type": "file", "size": p.stat().st_size})
+            return items
+
+        tree = walk(KNOWLEDGE_DIR, KNOWLEDGE_DIR)
+        send_json(self, {"tree": tree})
+
+    def handle_knowledge_read(self, query: str) -> None:
+        params = parse_qs(query)
+        rel = params.get("path", [""])[0]
+        if not rel or ".." in rel or rel.startswith("/"):
+            send_json(self, {"error": "非法路径"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        file_path = (KNOWLEDGE_DIR / rel).resolve()
+        if not file_path.is_file():
+            send_json(self, {"error": "不是文件"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = "[二进制文件，无法预览]"
+        except Exception as exc:
+            send_json(self, {"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        send_json(self, {"path": rel, "content": content, "size": file_path.stat().st_size})
 
     def handle_read_output(self) -> None:
         if OUTPUT_FILE.exists():
