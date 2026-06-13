@@ -10,8 +10,15 @@
     --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --border: #30363d;
     --text: #c9d1d9; --text2: #8b949e; --accent: #58a6ff; --green: #3fb950;
     --orange: #d2991d; --red: #f85149;
+    --term-bg: #0a0e13; --html-bg: #0d1117;
     --font-mono: "SF Mono", "Cascadia Code", Consolas, Monaco, monospace;
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+  }
+  [data-theme="light"] {
+    --bg: #ffffff; --surface: #f6f8fa; --surface2: #eaeef2; --border: #d0d7de;
+    --text: #1f2328; --text2: #656d76; --accent: #0969da; --green: #1a7f37;
+    --orange: #9a6700; --red: #cf222e;
+    --term-bg: #f6f8fa; --html-bg: #ffffff;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -22,9 +29,17 @@
     width: 220px; flex-shrink: 0; display: flex; flex-direction: column;
     background: var(--surface); border-right: 1px solid var(--border);
   }
-  .sidebar-header { padding: 16px 14px; border-bottom: 1px solid var(--border); }
-  .sidebar-header h1 { font-size: 15px; color: #e6edf3; margin-bottom: 2px; }
+  .sidebar-header { padding: 16px 14px; border-bottom: 1px solid var(--border); position: relative; }
+  .sidebar-header h1 { font-size: 15px; color: var(--text); margin-bottom: 2px; }
   .sidebar-header span { font-size: 11px; color: var(--text2); }
+  .theme-toggle {
+    position: absolute; right: 10px; top: 14px;
+    width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border);
+    background: transparent; color: var(--text2); cursor: pointer;
+    font-size: 15px; line-height: 26px; text-align: center; padding: 0;
+    transition: color .12s, border-color .12s;
+  }
+  .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
   .dot {
     display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     background: var(--green); margin-right: 6px; animation: pulse 1.5s ease-in-out infinite;
@@ -96,7 +111,7 @@
   .main {
     flex: 1; min-width: 0; height: 100vh; display: flex; flex-direction: column;
   }
-  .html-pane { flex: 1; min-height: 0; overflow: auto; background: #0d1117; position: relative; }
+  .html-pane { flex: 1; min-height: 0; overflow: auto; background: var(--html-bg); position: relative; }
   .html-empty {
     position: absolute; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 10px;
@@ -116,7 +131,7 @@
   }
 
   .terminal-pane {
-    flex: 1; min-height: 0; overflow: hidden; background: #0a0e13;
+    flex: 1; min-height: 0; overflow: hidden; background: var(--term-bg);
   }
   .terminal-pane .xterm { height: 100%; padding: 4px 0 0 8px; }
 
@@ -144,6 +159,7 @@
   <div class="sidebar-header">
     <h1><span class="dot"></span>Claude Code</h1>
     <span>ccr code · 实时网页代理</span>
+    <button class="theme-toggle" title="切换主题" onclick="toggleTheme()">&#x263e;</button>
   </div>
   <div class="sidebar-info">
     当前: <strong id="currentPageLabel">无</strong>
@@ -226,6 +242,28 @@ function switchToPage(name) {
   htmlStatus.textContent = new Date().toLocaleTimeString('zh-CN') + ' 已切换';
 }
 
+// ---- Theme ----
+function getTheme() {
+  return document.documentElement.getAttribute('data-theme') || 'dark';
+}
+
+const TERM_THEMES = {
+  dark:  { background: '#0a0e13', foreground: '#c9d1d9', cursor: '#58a6ff' },
+  light: { background: '#f6f8fa', foreground: '#1f2328', cursor: '#0969da' },
+};
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('ccrich-theme', theme);
+  const btn = document.querySelector('.theme-toggle');
+  if (btn) btn.innerHTML = theme === 'light' ? '&#x263c;' : '&#x263e;';
+  Object.assign(term.options, { theme: TERM_THEMES[theme] || TERM_THEMES.dark });
+}
+
+function toggleTheme() {
+  applyTheme(getTheme() === 'dark' ? 'light' : 'dark');
+}
+
 // ---- xterm.js init ----
 const term = new Terminal({
   cursorBlink: true,
@@ -234,6 +272,18 @@ const term = new Terminal({
   fontFamily: '"SF Mono", "Cascadia Code", Consolas, Monaco, monospace',
   allowProposedApi: true,
 });
+
+// 初始主题
+(function initTheme() {
+  const saved = localStorage.getItem('ccrich-theme');
+  const theme = saved || 'dark';
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.querySelector('.theme-toggle');
+  if (btn) btn.innerHTML = theme === 'light' ? '&#x263c;' : '&#x263e;';
+  if (theme === 'light') {
+    Object.assign(term.options, { theme: TERM_THEMES.light });
+  }
+})();
 
 const fitAddon = new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
