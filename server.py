@@ -44,14 +44,39 @@ OUTPUT_FILE = GENERATED_DIR / "claude-output.html"
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "3000"))
 TERMINAL_PORT = int(os.environ.get("TERMINAL_PORT", str(PORT + 1)))
-_TERMINAL_BASE = os.environ.get("TERMINAL_CMD", os.environ.get("CLAUDE_COMMAND", "ccr"))
-_TERMINAL_ARGS = json.loads(os.environ.get("TERMINAL_ARGS", os.environ.get("CLAUDE_ARGS", '["code"]')))
-TERMINAL_CMD_ARGS = [_TERMINAL_BASE, *_TERMINAL_ARGS, "--permission-mode", "bypassPermissions"]
+
+# 统一的 Claude 命令基础配置（单一来源，避免 TERMINAL/HTTP 两端分裂）
+# 优先级：TERMINAL_CMD/TERMINAL_ARGS > CLAUDE_COMMAND/CLAUDE_ARGS > 默认 "claude"（无参数）
+_CLAUDE_BASE = os.environ.get("TERMINAL_CMD", os.environ.get("CLAUDE_COMMAND", "claude"))
+_CLAUDE_ARGS_RAW = os.environ.get("TERMINAL_ARGS", os.environ.get("CLAUDE_ARGS", "[]"))
+_CLAUDE_ARGS = json.loads(_CLAUDE_ARGS_RAW)
+if not isinstance(_CLAUDE_ARGS, list) or not all(isinstance(a, str) for a in _CLAUDE_ARGS):
+    raise ValueError(
+        f"TERMINAL_ARGS/CLAUDE_ARGS 必须是 JSON 字符串数组（例如 '[\"code\"]'），"
+        f"当前值：{_CLAUDE_ARGS_RAW!r}"
+    )
+CLAUDE_BASE_CMD = [_CLAUDE_BASE, *_CLAUDE_ARGS]
+
+# WebSocket 终端用：基础命令 + 绕过权限
+TERMINAL_CMD_ARGS = [*CLAUDE_BASE_CMD, "--permission-mode", "bypassPermissions"]
+
 STREAM_TIMEOUT_SECONDS = int(os.environ.get("STREAM_TIMEOUT_SECONDS", "1800"))
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+
+# 知识库目录遍历的安全约束
+# 1. 不跟随符号链接：避免外部项目（FPGA 仓库等）整个被吞进知识树
+# 2. 忽略名单：跳过 .git / node_modules / __pycache__ 等无意义目录
+# 3. 深度与条目上限：防止意外塞入超大目录导致前端卡死
+KB_IGNORE_NAMES = {
+    ".git", ".DS_Store", "__pycache__", "node_modules",
+    ".obsidian", ".opencode", ".claude", ".idea", ".vscode",
+    "skills", "vtags.db", "~",
+}
+KB_MAX_DEPTH = 4
+KB_MAX_ENTRIES = 200
 
 
 def send_json(handler: SimpleHTTPRequestHandler, data: dict, code: int = 200) -> None:
@@ -112,15 +137,9 @@ def append_history(msgid: str, message: str) -> None:
 
 
 def claude_command(is_continue: bool) -> list[str]:
-    prefix = os.environ.get("CLAUDE_COMMAND", "ccr")
-    args = json.loads(os.environ.get("CLAUDE_ARGS", '["code"]'))
-
-    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
-        raise ValueError("CLAUDE_ARGS 必须是 JSON 字符串数组，例如 '[\"code\"]'")
-
+    """HTTP 生成长任务用的完整命令（基础命令 + 流式输出 + 绕过权限）"""
     cmd = [
-        prefix,
-        *args,
+        *CLAUDE_BASE_CMD,
         "-p",
         "--output-format",
         "stream-json",
@@ -475,26 +494,43 @@ class Handler(SimpleHTTPRequestHandler):
             shutil.copyfileobj(f, self.wfile)
 
     def handle_knowledge_list(self) -> None:
-        def walk(dir_path: Path, base: Path) -> list[dict]:
-            items = []
+        def walk(dir_path: Path, base: Path, depth: int = 0) -> list[dict]:
+            if depth >= KB_MAX_DEPTH:
+                return []
+            items: list[dict] = []
             try:
-                entries = sorted(dir_path.iterdir(), key=lambda x: (not (x.is_dir() or x.is_symlink()), x.name.lower()))
-            except PermissionError:
+                entries = sorted(
+                    dir_path.iterdir(),
+                    key=lambda x: (x.is_symlink(), not x.is_dir(), x.name.lower()),
+                )
+            except (PermissionError, OSError):
                 return items
+
             for p in entries:
-                if p.name.startswith(".") or p.name == "__pycache__":
+                if p.name in KB_IGNORE_NAMES or p.name.startswith("."):
                     continue
-                name = p.name
+                if len(items) >= KB_MAX_ENTRIES:
+                    items.append({"name": "…（已截断）", "path": "", "type": "truncated"})
+                    break
+
                 rel = str(p.relative_to(base))
                 try:
-                    is_dir = p.is_dir() or (p.is_symlink() and p.resolve().is_dir())
+                    if p.is_symlink():
+                        # 符号链接：展示但不展开，避免外部项目污染上下文
+                        try:
+                            size = p.stat().st_size
+                        except OSError:
+                            size = 0
+                        items.append({"name": p.name, "path": rel,
+                                      "type": "symlink", "size": size})
+                    elif p.is_dir():
+                        items.append({"name": p.name, "path": rel, "type": "dir",
+                                      "children": walk(p, base, depth + 1)})
+                    else:
+                        items.append({"name": p.name, "path": rel,
+                                      "type": "file", "size": p.stat().st_size})
                 except OSError:
-                    is_dir = False
-                if is_dir:
-                    children = walk(p, base) if p.is_dir() else walk(p.resolve(), base)
-                    items.append({"name": name, "path": rel, "type": "dir", "children": children})
-                else:
-                    items.append({"name": name, "path": rel, "type": "file", "size": p.stat().st_size})
+                    continue
             return items
 
         tree = walk(KNOWLEDGE_DIR, KNOWLEDGE_DIR)
@@ -503,11 +539,26 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_knowledge_read(self, query: str) -> None:
         params = parse_qs(query)
         rel = params.get("path", [""])[0]
-        if not rel or ".." in rel or rel.startswith("/"):
+
+        # 第一层：路径段级校验，拒绝 .. 和绝对路径
+        # （用 Path.parts 比字符串 ".." in rel 更严谨，不会误杀 ..foo 这种合法文件名）
+        if not rel:
+            send_json(self, {"error": "缺少 path 参数"}, HTTPStatus.BAD_REQUEST)
+            return
+        rel_path = Path(rel)
+        if rel_path.is_absolute() or any(part == ".." for part in rel_path.parts):
             send_json(self, {"error": "非法路径"}, HTTPStatus.BAD_REQUEST)
             return
 
-        file_path = (KNOWLEDGE_DIR / rel).resolve()
+        # 第二层：resolve() 后必须仍在 KNOWLEDGE_DIR 内
+        # 防止 KNOWLEDGE_DIR 下的符号链接逃逸到外部（如 D310 -> ../../D310）
+        file_path = (KNOWLEDGE_DIR / rel_path).resolve()
+        kb_root = KNOWLEDGE_DIR.resolve()
+        if file_path != kb_root and kb_root not in file_path.parents:
+            send_json(self, {"error": "路径越界（符号链接目标不在知识库内）"},
+                      HTTPStatus.BAD_REQUEST)
+            return
+
         if not file_path.is_file():
             send_json(self, {"error": "不是文件"}, HTTPStatus.BAD_REQUEST)
             return
@@ -695,7 +746,7 @@ def main() -> None:
     print(
         f"""
 Claude Code Web Proxy
-  engine: ccr code -p
+  engine: {" ".join(CLAUDE_BASE_CMD)} -p
   stream: JSONL -> SSE -> browser
   output: {OUTPUT_FILE}
   knowledge: {KNOWLEDGE_DIR}

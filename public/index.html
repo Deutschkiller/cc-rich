@@ -611,6 +611,17 @@ async function loadKnowledgeTree() {
 
 function renderKnowledgeNode(node, depth) {
   const pad = 14 + depth * 14;
+  if (node.type === 'truncated') {
+    return `<div class="kt-item" style="padding-left:${pad}px;color:var(--text2);font-style:italic">
+      <span class="kt-toggle"></span><span class="kt-name">${escapeHtml(node.name)}</span>
+    </div>`;
+  }
+  if (node.type === 'symlink') {
+    return `<div class="kt-item" style="padding-left:${pad}px;opacity:.85"
+      title="符号链接（不可展开）" onclick="event.stopPropagation();previewKnowledge('${escapeHtml(node.path)}')">
+      <span class="kt-toggle">&#x21aa;</span><span class="kt-name">${escapeHtml(node.name)}</span>
+    </div>`;
+  }
   if (node.type === 'dir') {
     const hasKids = node.children && node.children.length > 0;
     const id = 'k_' + node.path.replace(/[^a-zA-Z0-9]/g, '_');
